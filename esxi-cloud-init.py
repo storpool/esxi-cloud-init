@@ -119,6 +119,9 @@ def set_network(network_data):
     else:
         run_cmd(['esxcfg-vmknic', '-a', '-i', 'DHCP', '-m', str(link.get('mtu', '1500')), '-M',
                  link['ethernet_mac_address'], '-p', 'Management Network'])
+        dhcp_server_ip = run_cmd(['sh', '-c', 'cat /var/lib/dhcp/dhclient-vmk0.leases | grep dhcp-server-identifier | '
+                                              'head -n 1']).decode('ascii').strip().split(' ')[-1][:-1]
+        run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', dhcp_server_ip, '-n', '169.254.169.254/32'])
 
     r = {}
     for r in ifdef.get('routes', []):
@@ -128,9 +131,6 @@ def set_network(network_data):
             network = r['network']
     if 'gateway' in r:
         run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', r['gateway'], '-n', network])
-        dhcp_server_ip = run_cmd(['sh', '-c', 'cat /var/lib/dhcp/dhclient-vmk0.leases | grep dhcp-server-identifier | '
-                                              'head -n 1']).decode('ascii').strip().split(' ')[-1][:-1]
-        run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', dhcp_server_ip, '-n', '169.254.169.254/32'])
 
     for s in network_data.get('services', []):
         if s['type'] == 'dns':
