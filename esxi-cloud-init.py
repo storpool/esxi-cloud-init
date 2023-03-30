@@ -25,6 +25,7 @@ def run_cmd(args, ignore_failure=False, retry=1):
             if not ignore_failure:
                 raise
 
+
 def find_cdrom_dev():
     mpath_b = run_cmd(['esxcfg-mpath', '-b'])
     for line in mpath_b.decode().split('\n'):
@@ -32,16 +33,20 @@ def find_cdrom_dev():
         if m:
             return m.group(1)
 
+
 def mount_cdrom(cdrom_dev):
     run_cmd(['vsish', '-e', 'set', '/vmkModules/iso9660/mount', cdrom_dev])
 
+
 def umount_cdrom(cdrom_dev):
     run_cmd(['vsish', '-e', 'set', '/vmkModules/iso9660/umount', cdrom_dev])
+
 
 def load_network_data():
     # Should be openstack/latest/network_data.json
     with open('/vmfs/volumes/config-2/openstack/latest/network_data.json', 'r') as fd:
         return json.loads(fd.read())
+
 
 def load_meta_data():
     if os.path.exists('/vmfs/volumes/config-2/openstack/latest/meta_data.json'):
@@ -55,6 +60,7 @@ def load_meta_data():
             return {}
     data = json.loads(raw_content)
     return data
+
 
 def load_user_data():
     # Should be openstack/latest/user-data
@@ -86,9 +92,11 @@ def load_user_data():
         user_data[k] = v.rstrip()
     return user_data
 
+
 def set_hostname(fqdn):
     if fqdn:
         run_cmd(['esxcli', 'system', 'hostname', 'set', '--fqdn=%s' % fqdn], retry=3)
+
 
 def set_network(network_data):
     run_cmd(['esxcfg-vswitch', '-a', 'vSwitch0'], ignore_failure=True)
@@ -97,7 +105,8 @@ def set_network(network_data):
 
     # ESX's switch has no learning mode and enforce the MAC/port by default
     # With this line, we ensure a nested ESXi can contact the outside world
-    run_cmd(['esxcli', 'network', 'vswitch', 'standard', 'policy', 'security', 'set', '--allow-promiscuous=1', '--allow-forged-transmits=1', '--allow-mac-change=1', '--vswitch-name=vSwitch0'])
+    run_cmd(['esxcli', 'network', 'vswitch', 'standard', 'policy', 'security', 'set', '--allow-promiscuous=1',
+             '--allow-forged-transmits=1', '--allow-mac-change=1', '--vswitch-name=vSwitch0'])
     link_by_id = {i['id']: i for i in network_data['links']}
     open('/etc/resolv.conf', 'w').close()
     # Assuming one network per interface and interfaces are in the good order
@@ -105,9 +114,11 @@ def set_network(network_data):
     ifdef = network_data['networks'][0]
     link = link_by_id[ifdef['link']]
     if ifdef['type'] == 'ipv4':
-        run_cmd(['esxcfg-vmknic', '-a', '-i', ifdef['ip_address'], '-n', ifdef['netmask'], '-m', str(link.get('mtu', '1500')), '-M', link['ethernet_mac_address'], '-p', 'Management Network'])
+        run_cmd(['esxcfg-vmknic', '-a', '-i', ifdef['ip_address'], '-n', ifdef['netmask'], '-m',
+                 str(link.get('mtu', '1500')), '-M', link['ethernet_mac_address'], '-p', 'Management Network'])
     else:
-        run_cmd(['esxcfg-vmknic', '-a', '-i', 'DHCP', '-m', str(link.get('mtu', '1500')), '-M', link['ethernet_mac_address'], '-p', 'Management Network'])
+        run_cmd(['esxcfg-vmknic', '-a', '-i', 'DHCP', '-m', str(link.get('mtu', '1500')), '-M',
+                 link['ethernet_mac_address'], '-p', 'Management Network'])
 
     r = {}
     for r in ifdef.get('routes', []):
@@ -116,11 +127,15 @@ def set_network(network_data):
         else:
             network = r['network']
     if 'gateway' in r:
-            run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', r['gateway'], '-n', network])
+        run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', r['gateway'], '-n', network])
+        dhcp_server_ip = run_cmd(['sh', '-c', 'cat /var/lib/dhcp/dhclient-vmk0.leases | grep dhcp-server-identifier | '
+                                              'head -n 1']).decode('ascii').strip().split(' ')[-1][:-1]
+        run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', dhcp_server_ip, '-n', '169.254.169.254/32'])
 
     for s in network_data.get('services', []):
         if s['type'] == 'dns':
             run_cmd(['esxcli', 'network', 'ip', 'dns', 'server', 'add', '--server', s['address']])
+
 
 def set_ssh_keys(public_keys):
     if not public_keys:
@@ -140,6 +155,7 @@ def set_ssh_keys(public_keys):
             if key not in current_keys:
                 fd.write(key + '\n')
 
+
 def allow_nested_vm():
     with open('/etc/vmware/config', 'r') as fd:
         for line in fd.readlines():
@@ -148,6 +164,7 @@ def allow_nested_vm():
                 return
     with open('/etc/vmware/config', 'a+') as fd:
         fd.write('\nvmx.allowNested = "TRUE"\n')
+
 
 def set_root_pw(password):
     hashed_pw = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
@@ -159,26 +176,33 @@ def set_root_pw(password):
                 s[1] = hashed_pw
             fd.write(':'.join(s))
 
+
 def turn_off_firewall():
     run_cmd(['esxcli', 'network', 'firewall', 'set', '--enabled', 'false'])
 
+
 def restart_service(service_name):
-    run_cmd(['/etc/init.d/%s' % service_name , 'restart'])
+    run_cmd(['/etc/init.d/%s' % service_name, 'restart'])
+
 
 def enable_ssh():
     run_cmd(['vim-cmd', 'hostsvc/enable_ssh'])
     run_cmd(['vim-cmd', 'hostsvc/start_ssh'])
 
+
 def localhost_over_ipv4():
     run_cmd(['sed', '-i', "s,^::1,#::1,", '/etc/hosts'])
+
 
 def turn_tally2_off():
     run_cmd(['sed', '-i', "s,^,# disabled by esxi-cloud-init.py,", '/etc/pam.d/system-auth-tally'])
 
+
 def create_local_datastore():
     root_disk = glob.glob('/vmfs/devices/disks/t10*:1')[0].split(':')[0]  # TODO: probably kvm specific
 
-    proc = subprocess.Popen(['partedUtil', 'fixGpt', root_disk], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
+    proc = subprocess.Popen(['partedUtil', 'fixGpt', root_disk], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            stdin=subprocess.PIPE)
     fd = proc.stdout.fileno()
     fl = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
@@ -212,8 +236,12 @@ def create_local_datastore():
     new_partition_last_sector = quantity_of_cylinders - 4096
 
     if new_partition_last_sector - new_partition_first_sector > 4096 * 1024:
-        print(subprocess.check_output(["partedUtil", "add", root_disk, "gpt", "%s %s %s AA31E02A400F11DB9590000C2911D1B8 0" % (new_partition_partnum, new_partition_first_sector, new_partition_last_sector)]))
-        print(subprocess.check_output(["vmkfstools", "-C", "vmfs6", "-S", "local", "%s:%s" % (root_disk, new_partition_partnum)]))
+        print(subprocess.check_output(["partedUtil", "add", root_disk, "gpt",
+                                       "%s %s %s AA31E02A400F11DB9590000C2911D1B8 0" % (
+                                       new_partition_partnum, new_partition_first_sector, new_partition_last_sector)]))
+        print(subprocess.check_output(
+            ["vmkfstools", "-C", "vmfs6", "-S", "local", "%s:%s" % (root_disk, new_partition_partnum)]))
+
 
 def get_nic_mac_address(vmnic):
     # Name    PCI Device    Driver  Admin Status  Link Status  Speed  Duplex  MAC Address         MTU  Description
@@ -228,6 +256,7 @@ def get_nic_mac_address(vmnic):
         if cur_vmnic == vmnic:
             return mac
 
+
 def default_network_data():
     # "esxcli network nic list" fails time to time...
     for _ in range(60):
@@ -239,16 +268,16 @@ def default_network_data():
     return {
         "links": [
             {
-            "ethernet_mac_address": mac_address,
-            "id": "mylink",
-            "mtu": "1500",
-        }
+                "ethernet_mac_address": mac_address,
+                "id": "mylink",
+                "mtu": "1500",
+            }
         ],
         "networks": [
             {
-            "id": "network0",
-            "link": "mylink",
-            "type": "ipv4_dhcp"
+                "id": "network0",
+                "link": "mylink",
+                "type": "ipv4_dhcp"
             }
         ],
     }
