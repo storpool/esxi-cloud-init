@@ -244,24 +244,49 @@ def create_local_datastore():
 
 
 def get_nic_mac_address(vmnic):
+    vnics = get_vnics_list()
+    vnics_filtered = [vnic for vnic in vnics if vnic["name"] == vmnic]
+
+    if len(vnics_filtered):
+        return vnics_filtered[0]["mac_address"]
+    else:
+        raise KeyError(f"No vnic called {vmnic} found")
+
+
+def get_vnics_list():
+    vnics_list = list()
+
+    raw = run_cmd(["esxcli", "network", "nic", "list"]).decode()
     # Name    PCI Device    Driver  Admin Status  Link Status  Speed  Duplex  MAC Address         MTU  Description
     # ------  ------------  ------  ------------  -----------  -----  ------  -----------------  ----  -----------------------------------------------------
     # vmnic0  0000:00:03.0  e1000   Up            Up            1000  Full    fa:16:3e:25:bd:9f  1500  Intel Corporation 82540EM Gigabit Ethernet Controller
     # vmnic1  0000:00:04.0  e1000   Up            Up            1000  Full    fa:16:3e:a3:d8:34  1500  Intel Corporation 82540EM Gigabit Ethernet Controller
-    raw = run_cmd(["esxcli", "network", "nic", "list"]).decode()
     nic_list_lines = raw.split('\n')[2:]
-    print(nic_list_lines)
-    for line in nic_list_lines:
-        cur_vmnic, _, _, _, _, _, _, mac = line.split()[0:8]
-        if cur_vmnic == vmnic:
-            return mac
+
+    for nic_line in nic_list_lines:
+        vnic_dict = {}
+        line_elements = nic_line.split()
+        vnic_dict["name"] = line_elements[0]
+        vnic_dict["pci_id"] = line_elements[1]
+        vnic_dict["driver"] = line_elements[2]
+        vnic_dict["admin_status"] = line_elements[3].lower()
+        vnic_dict["link_status"] = line_elements[4].lower()
+        vnic_dict["speed"] = int(line_elements[5])
+        vnic_dict["duplex"] = line_elements[6].lower()
+        vnic_dict["mac_address"] = line_elements[7]
+        vnic_dict["mtu"] = int(line_elements[8])
+        vnic_dict["description"] = ' '.join(line_elements[9:])
+        vnics_list.append(vnic_dict)
+
+    return vnics_list
 
 
 def default_network_data():
     # "esxcli network nic list" fails time to time...
     for _ in range(60):
         try:
-            mac_address = get_nic_mac_address("vmnic0")
+            vnics_by_pci_id = sorted(get_vnics_list(), key=lambda item: item["pci_id"])
+            mac_address = vnics_by_pci_id[0]["mac_address"]
             break
         except subprocess.CalledProcessError:
             pass
