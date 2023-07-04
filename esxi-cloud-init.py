@@ -264,7 +264,7 @@ def get_vnics_list():
     # vmnic1  0000:00:04.0  e1000   Up            Up            1000  Full    fa:16:3e:a3:d8:34  1500  Intel Corporation 82540EM Gigabit Ethernet Controller
     nic_list_lines = raw.split('\n')[2:]
 
-    for nic_line in nic_list_lines:
+    for nic_line in [line for line in nic_list_lines if len(line)]:
         vnic_dict = {}
         line_elements = nic_line.split()
         vnic_dict["name"] = line_elements[0]
