@@ -119,6 +119,7 @@ def set_network(network_data):
     else:
         run_cmd(['esxcfg-vmknic', '-a', '-i', 'DHCP', '-m', str(link.get('mtu', '1500')), '-M',
                  link['ethernet_mac_address'], '-p', 'Management Network'])
+        poll_for_dhcp_lease()
         dhcp_server_ip = run_cmd(['sh', '-c', 'cat /var/lib/dhcp/dhclient-vmk0.leases | grep dhcp-server-identifier | '
                                               'tail -n 1']).decode('ascii').strip().split(' ')[-1][:-1]
         run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', dhcp_server_ip, '-n', '169.254.169.254/32'])
@@ -279,6 +280,18 @@ def get_vnics_list():
         vnics_list.append(vnic_dict)
 
     return vnics_list
+
+
+def poll_for_dhcp_lease():
+    for _ in range(60):
+        try:
+            lines = run_cmd(["esxcli", "network", "ip", "interface", "ipv4", "get", "-i", "vmk0"]).decode().split('\n')
+            if len(lines) >= 3:
+                vmk0_ip_settings = lines[2].split('')
+                if len(vmk0_ip_settings) == 7 and vmk0_ip_settings[4] == 'DHCP':
+                    return
+        except subprocess.CalledProcessError:
+            pass
 
 
 def default_network_data():
