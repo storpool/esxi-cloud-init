@@ -12,6 +12,7 @@ import fcntl
 import urllib.request
 
 CLASSLESS_ROUTE_PATTERN = re.compile(r"169\.254\.169\.254 ([0-9]*\.[0-9]*\.[0-9]*\.[0-9]),0")
+DHCP_IDENTIFIER_PATTERN = re.compile(r"dhcp-server-identifier ([0-9]*\.[0-9]*\.[0-9]*\.[0-9]);")
 
 
 def run_cmd(args, ignore_failure=False, retry=1):
@@ -306,11 +307,11 @@ def get_metadata_service_address():
         dhcp_lines = dhcp_leases_file.readlines()
         classless_routes_list = list(filter(lambda line: re.search(CLASSLESS_ROUTE_PATTERN, line), dhcp_lines))
 
-        if not len(classless_routes_list):
-            raise RuntimeWarning("Could not retrieve a classless route from the DHCP lease, please ensure Neutron is "
-                                 "configured to provide them")
-
-        return re.search(CLASSLESS_ROUTE_PATTERN, classless_routes_list[-1].strip()).group(1)
+        if len(classless_routes_list):
+            return re.search(CLASSLESS_ROUTE_PATTERN, classless_routes_list[-1].strip()).group(1)
+        else:
+            dhcp_identifier_list = list(filter(lambda line: re.search(DHCP_IDENTIFIER_PATTERN, line), dhcp_lines))
+            return re.search(DHCP_IDENTIFIER_PATTERN, dhcp_identifier_list[-1].strip()).group(1)
 
 
 def default_network_data():
