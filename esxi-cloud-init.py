@@ -10,6 +10,8 @@ import os
 import fcntl
 import urllib.request
 
+CLASSLESS_ROUTE_PATTERN = re.compile(r"169\.254\.169\.254 ([0-9]*\.[0-9]*\.[0-9]*\.[0-9]),0")
+
 
 def run_cmd(args, ignore_failure=False, retry=1):
     print('run: %s' % args)
@@ -120,9 +122,7 @@ def set_network(network_data):
         run_cmd(['esxcfg-vmknic', '-a', '-i', 'DHCP', '-m', str(link.get('mtu', '1500')), '-M',
                  link['ethernet_mac_address'], '-p', 'Management Network'])
         poll_for_dhcp_lease()
-        dhcp_server_ip = run_cmd(['sh', '-c', 'cat /var/lib/dhcp/dhclient-vmk0.leases | grep dhcp-server-identifier | '
-                                              'tail -n 1']).decode('ascii').strip().split(' ')[-1][:-1]
-        run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', dhcp_server_ip, '-n', '169.254.169.254/32'])
+        run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', get_metadata_service_address(), '-n', '169.254.169.254/32'])
 
     r = {}
     for r in ifdef.get('routes', []):
@@ -292,6 +292,18 @@ def poll_for_dhcp_lease():
                     return
         except subprocess.CalledProcessError:
             pass
+
+
+def get_metadata_service_address():
+    with open('/var/lib/dhcp/dhclient-vmk0.leases', 'r') as dhcp_leases_file:
+        dhcp_lines = dhcp_leases_file.readlines()
+        classless_routes_list = list(filter(lambda line: re.search(CLASSLESS_ROUTE_PATTERN, line), dhcp_lines))
+
+        if not len(classless_routes_list):
+            raise RuntimeWarning("Could not retrieve a classless route from the DHCP lease, please ensure Neutron is "
+                                 "configured to provide them")
+
+        return re.search(CLASSLESS_ROUTE_PATTERN, classless_routes_list[-1].strip()).group(1)
 
 
 def default_network_data():
