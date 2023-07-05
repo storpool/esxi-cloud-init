@@ -287,7 +287,7 @@ def poll_for_dhcp_lease():
         try:
             lines = run_cmd(["esxcli", "network", "ip", "interface", "ipv4", "get", "-i", "vmk0"]).decode().split('\n')
             if len(lines) >= 3:
-                vmk0_ip_settings = lines[2].split('')
+                vmk0_ip_settings = lines[2].split()
                 if len(vmk0_ip_settings) == 7 and vmk0_ip_settings[4] == 'DHCP':
                     return
         except subprocess.CalledProcessError:
