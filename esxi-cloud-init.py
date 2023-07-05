@@ -1,5 +1,6 @@
 #!/bin/python
 import crypt
+import logging
 import re
 import subprocess
 import json
@@ -14,12 +15,14 @@ CLASSLESS_ROUTE_PATTERN = re.compile(r"169\.254\.169\.254 ([0-9]*\.[0-9]*\.[0-9]
 
 
 def run_cmd(args, ignore_failure=False, retry=1):
-    print('run: %s' % args)
+    logging.debug(f"Executing command: {' '.join(args)}")
 
     while retry > 0:
         retry -= 1
         try:
-            return subprocess.check_output(args)
+            output = subprocess.check_output(args)
+            logging.debug(f"Output: {output.decode()}")
+            return output
         except subprocess.CalledProcessError:
             if retry:
                 time.sleep(1)
@@ -120,9 +123,10 @@ def set_network(network_data):
                  str(link.get('mtu', '1500')), '-M', link['ethernet_mac_address'], '-p', 'Management Network'])
     else:
         run_cmd(['esxcfg-vmknic', '-a', '-i', 'DHCP', '-m', str(link.get('mtu', '1500')), '-M',
-                 link['ethernet_mac_address'], '-p', 'Management Network'])
+                 link['ethernet_mac_address'], '-p', 'Management Network'], ignore_failure=True)
         poll_for_dhcp_lease()
-        run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add', '-g', get_metadata_service_address(), '-n', '169.254.169.254/32'])
+        run_cmd(['esxcli', 'network', 'ip', 'route', 'ipv4', 'add',
+                 '-g', get_metadata_service_address(), '-n', '169.254.169.254/32'], ignore_failure=True)
 
     r = {}
     for r in ifdef.get('routes', []):
@@ -237,10 +241,10 @@ def create_local_datastore():
     new_partition_last_sector = quantity_of_cylinders - 4096
 
     if new_partition_last_sector - new_partition_first_sector > 4096 * 1024:
-        print(subprocess.check_output(["partedUtil", "add", root_disk, "gpt",
+        logging.info(subprocess.check_output(["partedUtil", "add", root_disk, "gpt",
                                        "%s %s %s AA31E02A400F11DB9590000C2911D1B8 0" % (
                                        new_partition_partnum, new_partition_first_sector, new_partition_last_sector)]))
-        print(subprocess.check_output(
+        logging.info(subprocess.check_output(
             ["vmkfstools", "-C", "vmfs6", "-S", "local", "%s:%s" % (root_disk, new_partition_partnum)]))
 
 
@@ -283,15 +287,18 @@ def get_vnics_list():
 
 
 def poll_for_dhcp_lease():
-    for _ in range(60):
+    for i in range(60):
         try:
             lines = run_cmd(["esxcli", "network", "ip", "interface", "ipv4", "get", "-i", "vmk0"]).decode().split('\n')
             if len(lines) >= 3:
                 vmk0_ip_settings = lines[2].split()
                 if len(vmk0_ip_settings) == 7 and vmk0_ip_settings[4] == 'DHCP':
                     return
+            time.sleep(float(i))
         except subprocess.CalledProcessError:
             pass
+
+    raise TimeoutError("No valid DHCP lease was received, aborting")
 
 
 def get_metadata_service_address():
@@ -338,45 +345,55 @@ def run_commands(commands):
         run_cmd(c, ignore_failure=True)
 
 
-# See: https://github.com/ansible-collections/community.vmware/issues/144
-localhost_over_ipv4()
-turn_tally2_off()
-cdrom_dev = find_cdrom_dev()
-if cdrom_dev:
-    run_cmd(['vmkload_mod', 'iso9660'])
-    mount_cdrom(cdrom_dev)
-    network_data = load_network_data()
-    meta_data = load_meta_data()
-    user_data = load_user_data()
-    umount_cdrom(cdrom_dev)
-    run_cmd(['vmkload_mod', '-u', 'iso9660'])
-    try:
-        set_network(network_data)
-    except subprocess.CalledProcessError:
-        pass
-else:
-    network_data = default_network_data()
-    try:
-        set_network(network_data)
-    except subprocess.CalledProcessError:
-        pass
+def main():
+    logging.basicConfig(filename='/var/log/cloud-init.log',
+                        filemode='w',
+                        format='%(asctime)s %(levelname)s:%(message)s',
+                        level=logging.DEBUG)
+    # See: https://github.com/ansible-collections/community.vmware/issues/144
+    localhost_over_ipv4()
+    turn_tally2_off()
+
+    cdrom_dev = find_cdrom_dev()
+    if cdrom_dev:
+        run_cmd(['vmkload_mod', 'iso9660'])
+        mount_cdrom(cdrom_dev)
+        try:
+            set_network(load_network_data())
+        except subprocess.CalledProcessError as error:
+            logging.error(f"Failed executing command: {error}")
+    else:
+        try:
+            set_network(default_network_data())
+        except subprocess.CalledProcessError as error:
+            logging.error(f"Failed executing command: {error}")
+
     meta_data = load_meta_data()
     user_data = load_user_data()
 
-hostname = user_data.get('fqdn') or user_data.get('hostname') or meta_data.get('hostname')
-if hostname:
-    set_hostname(hostname)
-set_ssh_keys(meta_data.get('public_keys'))
-if 'admin_pass' in meta_data:
-    set_root_pw(meta_data['admin_pass'])
-if 'password' in user_data:
-    set_root_pw(user_data['password'])
-enable_ssh()
+    hostname = user_data.get('fqdn') or user_data.get('hostname') or meta_data.get('hostname')
+    if hostname:
+        set_hostname(hostname)
+    if 'public_keys' in meta_data:
+        set_ssh_keys(meta_data.get('public_keys'))
+    if 'admin_pass' in meta_data:
+        set_root_pw(meta_data['admin_pass'])
+    if 'password' in user_data:
+        set_root_pw(user_data['password'])
 
-turn_off_firewall()
-allow_nested_vm()
-restart_service('hostd')
-restart_service('vpxa')
-turn_tally2_off()
-create_local_datastore()
-run_commands(user_data.get("runcmd", []))
+    enable_ssh()
+    turn_off_firewall()
+    allow_nested_vm()
+    restart_service('hostd')
+    restart_service('vpxa')
+    turn_tally2_off()
+    create_local_datastore()
+    run_commands(user_data.get("runcmd", []))
+
+    if cdrom_dev:
+        umount_cdrom(cdrom_dev)
+        run_cmd(['vmkload_mod', '-u', 'iso9660'])
+
+
+if __name__ == "__main__":
+    main()
